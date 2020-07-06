@@ -1,0 +1,488 @@
+%% NEW CLICK TRAIN PROJECT
+function ClickParameters = ClickTrains(ClickParameters, LAT, LONG)
+Today = ClickParameters.Date(1,1);
+srise = []; sset = [];
+[srise, sset, ~] = sunrise(LAT, LONG, 0, [], Today);
+
+%% pre-cleaning - deleting loose clicks  
+L1 = size(ClickParameters,1); 
+L2 = 1;
+while L2 ~= L1
+    L1 = size(ClickParameters, 1);    
+    ClickParameters.ICI(1,1) = 0;
+    ClickParameters.ICI(2:end,1) = diff(ClickParameters.startSample)/(Fs/1000);
+    ClickParameters.ICI(ClickParameters.ICI < 0, 1) = 0;
+    ClickParameters.CPS = 1000./ClickParameters.ICI;
+    ClickParameters.CPS(ClickParameters.ICI == 0, 1) = 0;
+    L = size(ClickParameters,1);
+    AmpDiff(1,1) = 0;
+    AmpDiff(2:L,1) = diff(ClickParameters.Amp);
+    ClickParameters(ClickParameters.ICI < 0.75 & ClickParameters.ICI > 0 & AmpDiff < -6, :) = [];
+    AmpDiff(1,1) = 0;
+    L = size(ClickParameters,1);
+    AmpDiff(2:L,1)= diff(ClickParameters.Amp);
+    ClickParameters(ClickParameters.ICI < 0.5 & AmpDiff < -2 & ClickParameters.Class == 2 &  ClickParameters.ICI > 0, :) = [];
+    L2 = size(ClickParameters, 1);
+end
+
+% New ICI
+ClickParameters.ICI(1,1) = 0;
+ClickParameters.ICI(2:end,1) = diff(ClickParameters.startSample)/(Fs/1000);
+ClickParameters.ICI(ClickParameters.ICI < 0, 1) = 0;
+ClickParameters.CPS(1:size(ClickParameters,1),1) = 1000./ClickParameters.ICI(1:end,1);
+ClickParameters.CPS(ClickParameters.ICI == 0, 1) = 0;  
+% set CT to 0
+ClickParameters.CT(1:end,1) = 0;
+% ASSIGN CLICK TRAIN NUMBERS and create CTInfo
+CTInfo = struct();
+ClickParameters.ICI(ClickParameters.ICI > ICISep, 1) = 0;
+ICISepLoc = find(ClickParameters.ICI == 0);
+CTNum = 1; % click train number
+Zb = size(ICISepLoc,1);
+
+while Zb > 0
+  % If the CT would have a length smaller than the max length
+  % of it selected by the user, continue without any issues
+    if Zb == 1
+      Start = ICISepLoc(1); % First row 
+      ClickParameters.ICI(Start, 1) = 0;
+      ClickParameters.CT(Start:end,1) = CTNum;
+      CTLength = End - Start + 1; 
+      if CTLength < 16
+         % nothing
+      else % CTLength >= 15 % && CTLength < MaxLength
+         CTTemp = ClickParameters(ClickParameters.CT == CTNum, :);
+         % Estimates and to CTInfo
+         [RecalculateCTNum, DeleteLQ, Type, sp] = Species(CTTemp, Fs, ICISep);
+         if DeleteLQ == 1 
+           ClickParameters(ClickParameters.CT == CTNum & ClickParameters.Class == 2, :) = [];
+           CTTemp(CTTemp.Class == 2,:) = [];
+             if RecalculateCTNum == 1
+              [ClickParameters, CTTemp, CTNum, End, CTInfo] = Recalculate(CTTemp, ClickParameters, CTNum, Fs, ICISep, CTInfo, srise, sset, sp, Type);
+             else % if RecalculateCTNum == 0
+              CTTemp = NewICI(CTTemp, Fs);
+              ClickParameters.ICI(ClickParameters.CT == CTNum,1) = CTTemp.ICI;
+                if size(CTTemp,1) > 15
+                  CTInfo = CTInfoMaker(CTInfo, CTTemp, srise, sset, sp, Type);
+                end 
+             end            
+         else % if DeleteLQ == 0
+             CTInfo = CTInfoMaker(CTInfo, CTTemp, srise, sset, sp, Type);
+         end % if DeleteLQ
+      end % If LengthCT < 16
+     Zb = 0; 
+    else % if Zb >= 1
+      End = ICISepLoc(2)-1; % First row with a 0
+      Start = ICISepLoc(1); % First row 
+      ClickParameters.ICI(Start,1) = 0;
+      ClickParameters.CT(Start:End,1) = CTNum; 
+      CTLength = End - Start + 1; 
+      if CTLength < 16
+         CTNum = CTNum + 1;
+      else % CTLength >= 15 % && CTLength < MaxLength
+          clear CTTemp
+          CTTemp = ClickParameters(ClickParameters.CT == CTNum, :);
+          % Estimates and to CTInfo
+          [RecalculateCTNum, DeleteLQ, Type, sp] = Species(CTTemp, Fs, ICISep);
+          if DeleteLQ == 1 
+            ClickParameters(ClickParameters.CT == CTNum & ClickParameters.Class == 2, :) = [];
+            CTTemp(CTTemp.Class == 2,:) = [];
+
+             if RecalculateCTNum == 1
+              [ClickParameters, CTTemp, CTNum, End, CTInfo] = Recalculate(CTTemp, ClickParameters, CTNum, Fs, ICISep, CTInfo, srise, sset, sp, Type);
+             else % if RecalculateCTNum == 0
+              CTTemp = NewICI(CTTemp, Fs);
+              [~, ~, Type, sp] = Species(CTTemp, Fs, ICISep);
+              IDs = CTTemp.ID;
+              End = find(ClickParameters.ID(1:end,1) == IDs(end));
+              ClickParameters.ICI(ClickParameters.CT == CTNum,1) = CTTemp.ICI;
+                if size(CTTemp,1) > 15
+                  CTInfo = CTInfoMaker(CTInfo, CTTemp, srise, sset, sp, Type);
+                end 
+              CTNum = CTNum + 1;
+             end            
+          else % if DeleteLQ == 0
+             IDs = CTTemp.ID;
+             End = find(ClickParameters.ID(1:end,1) == IDs(end));
+             if size(CTTemp,1) > 15
+               CTInfo = CTInfoMaker(CTInfo, CTTemp, srise, sset, sp, Type);
+             end 
+             CTNum = CTNum + 1;
+          end 
+      end % If LengthCT < 16
+    clear ICISepLoc
+    ICISepLoc = find(ClickParameters.ICI(End+1:end,1) == 0);
+    ICISepLoc = ICISepLoc + End;
+    Zb = size(ICISepLoc,1);
+    clear CTTemp1
+    end 
+end % End loop m = 1:Zb
+end
+
+%% CLICK TRAIN TYPE
+function [RecalculateCTNum, DeleteLQ, Type, sp] = Species(CTTemp, Fs, ICISep)
+ CFDiff = diff(CTTemp.CF);
+ MeanPF = mean(CTTemp.PF);
+ PercChangeCF = (CFDiff./CTTemp.CF(1:end-1))*100;
+ MeanPercChangeCF = mean(abs(PercChangeCF));
+ CPSDiff = diff(CTTemp.CPS);
+ PercChange = (CPSDiff./CTTemp.CPS(1:end-1))*100;
+ MedianPercChangeCPS = median(abs(PercChange(2:end)));
+ if size(CTTemp,1) > 1450
+     % Large click trains (in noisy environment)
+     if sum(CTTemp.Class == 1) > 5 % Potential porpoise clicks
+       CTTemp(CTTemp.Class == 2, :) = []; % Remove LQ
+       CTTemp = NewICI(CTTemp, Fs);
+       CPSDiff = diff(CTTemp.CPS);
+       PercChange = (CPSDiff./CTTemp.CPS(1:end-1))*100;
+       MedianPercChangeCPS = median(abs(PercChange(2:end)));
+       MoreThanOneCT = sum(CTTemp.ICI > ICISep); % 
+        if MedianPercChangeCPS > 40
+           Type = 'LQ-NBHF';
+           sp = 2;  
+           DeleteLQ = 1;
+           if MoreThanOneCT > 0
+              RecalculateCTNum = 1;
+           else
+              RecalculateCTNum = 0;
+           end
+        else
+            MedianCPS = median(CTTemp.CPS);
+            if MeanPF > 140000 && MedianCPS < 8.7 && MedianCPS > 7 && MeanPercChangeCF < 0.5
+                % Sonar
+               Type = 'Sonar';
+               sp = 3;
+               DeleteLQ = 0;
+            else  
+               Type = 'NBHF';
+               sp = 1;
+               DeleteLQ = 1;
+               if MoreThanOneCT > 0
+                  RecalculateCTNum = 1;
+               else
+                  RecalculateCTNum = 0;
+               end
+           end
+        end 
+     else
+       Type = 'Non-NBHF';
+       sp = 3;   
+       DeleteLQ = 0;
+       RecalculateCTNum = 0;
+     end 
+ elseif size(CTTemp,1) < 15  
+   Type = 'Non-NBHF';
+   sp = 3;   
+   DeleteLQ = 0;
+   RecalculateCTNum = 0;
+ elseif MedianPercChangeCPS >= 150  
+     if sum(CTTemp.Class == 1) > 5
+       CTTemp(CTTemp.Class == 2, :) = [];
+       CTTemp = NewICI(CTTemp, Fs);
+       CPSDiff = diff(CTTemp.CPS);
+       PercChange = (CPSDiff./CTTemp.CPS(1:end-1))*100;
+       MedianPercChangeCPS = median(abs(PercChange(2:end)));
+       MoreThanOneCT = sum(CTTemp.ICI > 1000);
+        if MedianPercChangeCPS > 40
+           Type = 'LQ-NBHF';
+           sp = 2;  
+           DeleteLQ = 1;
+           if MoreThanOneCT > 0
+              RecalculateCTNum = 1;
+           else
+              RecalculateCTNum = 0;
+           end
+        else
+            MedianCPS = median(CTTemp.CPS);
+            if MeanPF > 140000 && MedianCPS < 8.7 && MedianCPS > 7 && MeanPercChangeCF < 0.5
+                % Sonar
+               Type = 'Sonar';
+               sp = 3;
+               DeleteLQ = 0;
+            else
+               Type = 'NBHF';
+               sp = 1;
+               DeleteLQ = 1;
+               if MoreThanOneCT > 0
+                  RecalculateCTNum = 1;
+               else
+                  RecalculateCTNum = 0;
+               end
+            end
+        end 
+     else
+       Type = 'Non-NBHF';
+       sp = 3;
+       DeleteLQ = 0;
+       RecalculateCTNum = 0;
+     end 
+ elseif MedianPercChangeCPS <= 40  
+     MedianCPS = median(CTTemp.CPS);
+        if MeanPF > 140000 && MedianCPS < 8.7 && MedianCPS > 7 && MeanPercChangeCF < 0.5
+            % Sonar
+           Type = 'Sonar';
+           sp = 3;
+           DeleteLQ = 0;
+           RecalculateCTNum = 0;
+        else 
+           Type = 'NBHF';
+           sp = 1;
+           DeleteLQ = 0;
+           RecalculateCTNum = 0;
+        end 
+ elseif MedianPercChangeCPS > 40 && MedianPercChangeCPS < 150 && MeanPercChangeCF <= 8
+    if     sum(CTTemp.Class == 1) > 5
+           CTTemp(CTTemp.Class == 2, :) = [];
+           CTTemp = NewICI(CTTemp, Fs);
+           CPSDiff = diff(CTTemp.CPS);
+           PercChange = (CPSDiff./CTTemp.CPS(1:end-1))*100;
+           MedianPercChangeCPS = median(abs(PercChange(2:end)));
+           MoreThanOneCT = sum(CTTemp.ICI > 1000);
+         if MedianPercChangeCPS > 40
+               Type = 'LQ-NBHF';
+               sp = 2;  
+               DeleteLQ = 1;
+               if MoreThanOneCT > 0
+                  RecalculateCTNum = 1;
+               else
+                  RecalculateCTNum = 0;
+               end
+         else % MedianPercChangeCPS < 40
+               MedianCPS = median(CTTemp.CPS);
+            if MeanPF > 140000 && MedianCPS < 8.7 && MedianCPS > 7 && MeanPercChangeCF < 0.5
+                % Sonar
+               Type = 'Sonar';
+               sp = 3;
+               DeleteLQ = 0;
+            else
+               Type = 'NBHF';
+               sp = 1;
+               DeleteLQ = 1;
+               if MoreThanOneCT > 0
+                  RecalculateCTNum = 1;
+               else
+                  RecalculateCTNum = 0;
+               end   
+            end 
+         end 
+    else
+       Type = 'Non-NBHF';
+       sp = 3;
+       DeleteLQ = 0;
+       RecalculateCTNum = 0;
+    end 
+ else 
+   Type = 'Non-NBHF';
+   sp = 3;
+   DeleteLQ = 0;
+   RecalculateCTNum = 0;
+ end
+end 
+
+%% EXTRACT PATTERNS
+function [CTTemp2, NewCT] = ExtractPatterns(CTTemp, Fs)
+% add rown numbers to see if what we removed is another click train
+CTTemp.RowN(1,1) = 1;
+CTTemp.RowN(1:end,1) = 1:size(CTTemp,1);
+% Save in another variable
+CTTemp1 = CTTemp;  
+% A large difference indicates echoes
+SortedCPS = sort(CTTemp.CPS);
+DiffSorted = diff(SortedCPS);
+[MaxDiffSorted, ~] = max(DiffSorted);
+% Good click trains that only have echoes 
+if MaxDiffSorted < 28
+    % Do nothing
+else % if MaxDiffSorted < 500
+    Outlier = isoutlier(CTTemp.CPS);
+    HighCPS = CTTemp.CPS > 50;
+    Both = Outlier + HighCPS;
+    CTTemp(Both == 2,:) = [];
+    CTTemp = NewICI(CTTemp,Fs);
+    SortedCPS = sort(CTTemp.CPS);
+    DiffSorted = diff(SortedCPS);
+    [MaxDiffSorted, ~] = max(DiffSorted);
+end
+if MaxDiffSorted < 28 && MaxDiffSorted > 10 && size(CTTemp,1) < 100
+   NewCT = CTTemp; % it ends here
+   NewCT = NewICI(NewCT, Fs);
+else
+    % remove local min
+    S1 = size(CTTemp,1);
+    S2 = 1;
+    while S1 ~= S2
+        clear DeleteRows LargeDiff LocMin DiffAmps
+        S1 = size(CTTemp,1);
+        DiffAmps(1,1) = 0;
+        L = size(CTTemp,1);
+        DiffAmps(2:L,1) = diff(CTTemp.Amp);
+        LocMin = islocalmin(CTTemp.Amp);
+        LargeDiff = DiffAmps < -5;
+        DeleteRows = LocMin + LargeDiff;
+        CTTemp(DeleteRows == 2,:) = [];
+        CTTemp = NewICI(CTTemp,Fs);
+        S2 = size(CTTemp,1);
+    end 
+end
+SortedCPS = sort(CTTemp.CPS);
+DiffSorted = diff(SortedCPS);
+[MaxDiffSorted, ~] = max(DiffSorted);
+
+if MaxDiffSorted > 35 && size(CTTemp,1) > 100
+     % Finding the stable areas
+     StartRow = [];
+      % Bit by bit
+     CPSDiff = diff(CTTemp.CPS);
+     PercChangeS = (CPSDiff./CTTemp.CPS(1:end-1))*100;
+     PercChangeS = abs(PercChangeS(2:end));
+     PercCPSDiff = movmean(PercChangeS,4);
+     StartRow = find(PercCPSDiff < 5);
+     StartRow = StartRow + 2; % because I removed the first value == 0
+     DiffStartRow = diff(StartRow);
+     Here = find(DiffStartRow == 1);
+     k = []; L = []; StdCPS1 = []; StdCPS2 = [];
+
+     % go into the CT
+     clear RowN 
+     RowsToKeep = [];
+     Keep = 1;
+     if size(StartRow,1) == 0 
+       RowN = 1;
+     else
+       RowN = StartRow(Here(1));  % Low variability in CPS (for the next 4) 
+     end 
+     RowsToKeep(1,1) = RowN;
+     FirstRowN = RowN;
+
+     % Look backwards
+     while RowN > 10
+     ClickCPS = CTTemp.CPS(RowN,1);
+     ClickAmp = CTTemp.Amp(RowN,1);
+     ClickStartSample = CTTemp.startSample(RowN,1);
+     ICIs = abs(ClickStartSample - CTTemp.startSample(RowN-9:RowN-1,1))/(Fs/1000);
+     CPSs = 1000./ICIs;
+     Amps = CTTemp.Amp(RowN-9:RowN-1,1);
+     Amps = abs(ClickAmp - Amps);
+     DiffCPSs = abs(ClickCPS - CPSs);
+     [~, ixCPS] = min(DiffCPSs);
+         if Amps(ixCPS) < 5
+           DiffCPSs(ixCPS) = 1000;
+           [~, ixCPS] = min(DiffCPSs);
+           RowN = RowN - ixCPS;
+         else
+           RowN = RowN - ixCPS;  
+         end 
+     Keep = Keep + 1;  
+     RowsToKeep(Keep,1) = RowN;
+     end 
+
+     % Look forwards
+     RowN = FirstRowN;
+     while RowN < size(CTTemp,1)-10
+     ClickCPS = CTTemp.CPS(RowN,1);
+     ClickAmp = CTTemp.Amp(RowN,1);
+     ClickStartSample = CTTemp.startSample(RowN,1);
+     ICIs = abs(CTTemp.startSample(RowN+1:RowN+9,1) - ClickStartSample)/(Fs/1000);
+     CPSs = 1000./ICIs;
+     Amps = CTTemp.Amp(RowN+1:RowN+9,1);
+     Amps = abs(Amps - ClickAmp);
+     DiffCPSs = abs(CPSs - ClickCPS);
+     [~, ixCPS] = min(DiffCPSs);
+         if Amps(ixCPS) < 5
+           DiffCPSs(ixCPS) = 1000;
+           [~, ixCPS] = min(DiffCPSs);
+           RowN = RowN + ixCPS;
+         else
+           RowN = RowN + ixCPS;  
+         end 
+     Keep = Keep + 1;  
+     RowsToKeep(Keep,1) = RowN;
+     end 
+ RowsToKeep(end+1:end+20,1) = [1:10, size(CTTemp,1)-9:size(CTTemp,1)];
+ RowsToKeep = sort(unique(RowsToKeep));
+
+ % Delete loose clicks
+L1 = size(CTTemp,1);
+L2 = 1;
+   while L2 ~= L1
+    L1 = size(CTTemp,1);           
+    CTTemp = NewICI(CTTemp, Fs);   
+    LooseClicks = find(CTTemp.ICI > 250);
+    Positions = find(diff(LooseClicks) == 1);
+    RowsToDelete = LooseClicks(Positions);
+    CTTemp(RowsToDelete, :) = [];
+    L2 = size(CTTemp,1);
+   end
+ NewCT = CTTemp(RowsToKeep,:);
+ NewCT = NewICI(NewCT, Fs);
+else 
+ NewCT = CTTemp; 
+ NewCT = NewICI(NewCT, Fs);
+end 
+RowsLeft = NewCT.RowN(:,1);
+CTTemp2 = CTTemp1;
+CTTemp2(RowsLeft,:) = [];
+end % end function
+
+%% BEHAVIOUR
+function [Behav] = Behaviour(CPS, MeanPF, MeanPercChangeCF)
+    MedianCPS = median(CPS);
+    L = size(CPS,1);
+    SortedCPS = sort(CPS);
+    CPS90Perc1 = SortedCPS(1:floor(0.90*L));
+    CPS20 = mean(CPS(1:floor(L*0.2)));
+    CPS50 = mean(CPS(floor(0.2*L):floor(0.8*L)));
+    CPS90 = mean(CPS(floor(0.8*L):end));
+       if MeanPF > 140000 && MedianCPS < 8.5 && MedianCPS > 7.1 && MeanPercChangeCF < 0.5
+         Behav = 'Sonar'; % For Scotland
+       elseif CPS90Perc1 < 100
+         Behav = 'Orientation';
+       else
+            CPS90Perc2 = SortedCPS(floor(0.10*L):end);
+            if CPS90Perc2 > 100
+              Behav = 'Socialising';
+            else    
+              BreakingPoint = find(CPS > 100);
+              DiffBP = diff(BreakingPoint);
+              BP = find(DiffBP == 1);
+              if size(BP, 1) > 0
+                Pos = BreakingPoint(BP(1));
+                if size(BP, 1) > 0 && Pos > 5 && size(CPS,1) > Pos+5
+                  Before = mean(CPS(Pos-5:Pos));
+                  After = mean(CPS(Pos:Pos+5));
+                else
+                    Before = 0;
+                    After = 0;
+                end
+
+                if Before < 100 && After > 100
+                  Behav = 'Foraging';        
+                else
+                    if mean(CPS90Perc1) > 120
+                      Behav = 'Socialising';
+                    elseif CPS20 > 100 && CPS50 < 100 && CPS90 < CPS50
+                      Behav = 'Socialising';     
+                    else    
+                      Behav = 'Unknown';    
+                    end   
+                end
+              else
+                if mean(CPS90Perc1) > 150
+                   Behav = 'Socialising';
+                elseif CPS20 > 100 && CPS50 < 100 && CPS90 < 100
+                   Behav = 'Socialising';     
+                else    
+                   Behav = 'Unknown';  
+                end
+              end 
+            end
+       end
+end
+
+%% ESTIMATE ICI and CPS 
+function CTTemp = NewICI(CTTemp, Fs)
+    CTTemp.ICI(1,1) = 0;
+    CTTemp.ICI(2:end,1) = diff(CTTemp.startSample)/(Fs/1000);
+    CTTemp.CPS(1:size(CTTemp,1),1) = 1000./CTTemp.ICI(1:end,1);
+    CTTemp.CPS(1,1) = 0;
+end
